@@ -13,38 +13,50 @@ type Message = {
 type ChatResponse = {
   reply: string;
   toolCalls: ToolCall[];
+  sessionId: string;
 };
 
-const STORAGE_KEY = 'chat-history';
+type HistoryResponse = { messages: Message[] };
+
+const SESSION_KEY = 'chat-session-id';
 
 export default function ChatBox() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const hydrated = useRef(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let saved: string | null = null;
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as Message[];
-        if (Array.isArray(parsed)) setMessages(parsed);
-      }
+      saved = localStorage.getItem(SESSION_KEY);
     } catch {
-      // ignore corrupt storage
+      // ignore
     }
-    hydrated.current = true;
-  }, []);
+    if (!saved) return;
+    setSessionId(saved);
 
-  useEffect(() => {
-    if (!hydrated.current) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-    } catch {
-      // ignore quota / private mode failures
-    }
-  }, [messages]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/chat/history?sessionId=${encodeURIComponent(saved)}`,
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as HistoryResponse;
+        if (!cancelled && Array.isArray(data.messages)) {
+          setMessages(data.messages);
+        }
+      } catch {
+        // ignore — fresh session if history fetch fails
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -55,8 +67,9 @@ export default function ChatBox() {
 
   function clear() {
     setMessages([]);
+    setSessionId(null);
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(SESSION_KEY);
     } catch {
       // ignore
     }
@@ -68,8 +81,7 @@ export default function ChatBox() {
     if (!trimmed || loading) return;
 
     const newUserMsg: Message = { role: 'user', content: trimmed };
-    const next = [...messages, newUserMsg];
-    setMessages(next);
+    setMessages((prev) => [...prev, newUserMsg]);
     setInput('');
     setLoading(true);
 
@@ -78,7 +90,8 @@ export default function ChatBox() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: next.map(({ role, content }) => ({ role, content })),
+          message: trimmed,
+          sessionId: sessionId ?? undefined,
         }),
       });
 
@@ -91,6 +104,15 @@ export default function ChatBox() {
           { role: 'assistant', content: `⚠ ${errText}` },
         ]);
         return;
+      }
+
+      if (!sessionId && data.sessionId) {
+        setSessionId(data.sessionId);
+        try {
+          localStorage.setItem(SESSION_KEY, data.sessionId);
+        } catch {
+          // ignore
+        }
       }
 
       setMessages((prev) => [
