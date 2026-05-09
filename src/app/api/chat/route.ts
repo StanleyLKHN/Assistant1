@@ -48,9 +48,17 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   let sessionId = body.sessionId;
+  if (sessionId) {
+    const { data: existing } = await supabase
+      .from('unweave_chat_sessions')
+      .select('id')
+      .eq('id', sessionId)
+      .maybeSingle();
+    if (!existing) sessionId = undefined;
+  }
   if (!sessionId) {
     const { data, error } = await supabase
-      .from('chat_sessions')
+      .from('unweave_chat_sessions')
       .insert({})
       .select('id')
       .single();
@@ -65,7 +73,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const { data: rows, error: historyError } = await supabase
-    .from('chat_messages')
+    .from('unweave_chat_messages')
     .select('role, content')
     .eq('session_id', sessionId)
     .order('created_at', { ascending: true });
@@ -80,7 +88,7 @@ export async function POST(request: Request): Promise<Response> {
   }));
 
   const { error: insertUserErr } = await supabase
-    .from('chat_messages')
+    .from('unweave_chat_messages')
     .insert({ session_id: sessionId, role: 'user', content: message });
   if (insertUserErr) {
     return errorResponse(
@@ -147,7 +155,7 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse(asMessage(err), 500, sessionId, toolCalls);
   }
 
-  const { error: insertAsstErr } = await supabase.from('chat_messages').insert({
+  const { error: insertAsstErr } = await supabase.from('unweave_chat_messages').insert({
     session_id: sessionId,
     role: 'assistant',
     content: reply,

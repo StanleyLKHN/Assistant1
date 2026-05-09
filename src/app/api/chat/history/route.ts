@@ -23,7 +23,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const { data, error } = await supabase
-    .from('chat_messages')
+    .from('unweave_chat_messages')
     .select('role, content, tool_calls')
     .eq('session_id', sessionId)
     .order('created_at', { ascending: true });
