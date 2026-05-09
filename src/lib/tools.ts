@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { products } from './products';
+import { getSupabase } from './supabase';
 
 type ToolResult = { result: string; summary: string };
 
@@ -71,6 +72,68 @@ const lookupProduct: ToolEntry<{ slug: string }> = {
   },
 };
 
+const checkOrderStatus: ToolEntry<{ order_id: string; email: string }> = {
+  definition: {
+    name: 'check_order_status',
+    description:
+      "Look up an order's status. BOTH order_id and email are required — never look up by email alone (privacy: prevents customer A from peeking at customer B's orders).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        order_id: {
+          type: 'string',
+          description: "The customer's order id, e.g. 'UNW-1003'.",
+        },
+        email: {
+          type: 'string',
+          description: 'The email address attached to the order.',
+        },
+      },
+      required: ['order_id', 'email'],
+    },
+  },
+  handler: async ({ order_id, email }) => {
+    let supabase;
+    try {
+      supabase = getSupabase();
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      return { result: `Order lookup unavailable: ${m}`, summary: 'lookup error' };
+    }
+
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', order_id)
+      .eq('customer_email', email)
+      .maybeSingle();
+
+    if (error) {
+      return { result: `Order lookup error: ${error.message}`, summary: 'lookup error' };
+    }
+    if (!data) {
+      return {
+        result: `No order matches order_id ${order_id} for that email. Do not invent details — offer to escalate to a human teammate.`,
+        summary: 'not found',
+      };
+    }
+
+    const row = data as Record<string, unknown>;
+    const status = (row.status as string | null) ?? 'unknown';
+    const total = row.total != null ? `$${row.total}` : 'n/a';
+    const placedAt = (row.placed_at as string | null) ?? 'unknown';
+
+    const result = [
+      `Order ${order_id}`,
+      `Status: ${status}`,
+      `Total: ${total}`,
+      `Placed: ${placedAt}`,
+    ].join('\n');
+
+    return { result, summary: status };
+  },
+};
+
 const escalateToHuman: ToolEntry<{ reason: string }> = {
   definition: {
     name: 'escalate_to_human',
@@ -99,12 +162,14 @@ const escalateToHuman: ToolEntry<{ reason: string }> = {
 const registry = {
   list_products: listProducts,
   lookup_product: lookupProduct,
+  check_order_status: checkOrderStatus,
   escalate_to_human: escalateToHuman,
 } as const;
 
 export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   listProducts.definition,
   lookupProduct.definition,
+  checkOrderStatus.definition,
   escalateToHuman.definition,
 ];
 
